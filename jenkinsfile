@@ -1,0 +1,71 @@
+pipeline {
+    agent any
+    tools {                                                                         //Tool configuration
+        maven "maven3"
+        jdk "jdk11"  
+    }
+    
+    
+    stages {                                                                        //code checkout from github repository
+        stage('Git checkout') {
+            steps {
+                git branch: 'main', changelog: false, poll: false, url: 'https://github.com/hollumighty/shopping-cart.git'
+            }
+        }
+        
+        stage('Compile') {                                                          //Compile
+            steps {
+                sh 'mvn clean compile -DskipTests=true'
+            }
+        }
+        
+         stage('package') {                                                         //package
+            steps {
+                sh 'mvn clean package -DskipTests=true'
+            }
+        }
+        
+        stage('OWASP scan') {                                                       //OWASP scan for security vulnarabilty check 
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ ', odcInstallation: 'DP'
+                dependencyCheckPublisher pattern: '**dependency-check-report.xml'
+            }
+        }
+        
+        stage('Sonarqube') {                                                        //for code quality check
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh '''
+                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=shopping-cart \
+                        -Dsonar_java_binaries*. \
+                        -Dsonar.projectKey=shopping-cart
+                    '''
+                }
+            }
+        }
+        
+        stage('docker build n push') {                                              //docker build and push
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'dockerpwd') {
+                        
+                        sh 'docker build -t shopping-cart -f docker/Dockerfile .'
+                        sh 'docker tag shopping-cart hollumighty/shopping-cart:latest'
+                        sh 'docker push hollumighty/shopping-cart:latest'
+                    }
+                }
+            }
+        }
+        
+        stage('deploy') {                                                         //run the docker image and deploy to docker
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'dockerpwd') {
+                        
+                        sh 'docker run -d --name shopping-cart -p 8070:8070 hollumighty/shopping-cart:latest'
+                    }
+                }
+            }
+        }    
+    }
+}
